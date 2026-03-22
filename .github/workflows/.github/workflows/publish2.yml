@@ -1,0 +1,92 @@
+name: WP Auto Blog Draft Generator
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '강제 실행 (키워드 부족/중복 제한 무시)'
+        type: boolean
+        default: false
+
+  # 안정화 후 필요할 때만 아래 주석 해제
+  # schedule:
+  #   # 월/수/금 08:00 KST (= UTC 전날 23:00)
+  #   - cron: '0 23 * * 0,2,4'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wp-auto-draft
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 패키지 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 데이터 폴더 확인
+        run: |
+          mkdir -p data
+          [ -f data/published_hashes.json ] || echo "[]" > data/published_hashes.json
+
+      - name: 자동 초안 생성 실행
+        working-directory: scripts
+        env:
+          # 실행 옵션
+          FORCE_RUN: ${{ github.event.inputs.force || 'false' }}
+          DRAFT_ONLY: "true"
+
+          # AI API 키 (최소 1개)
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+          # WordPress
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+
+          # 이미지 API
+          UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
+          PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
+
+          # 선택값
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          AI_PRIORITY: ${{ secrets.AI_PRIORITY }}
+
+          # 운영용
+          TZ: Asia/Seoul
+        run: python main.py
+
+      - name: 변경 파일 커밋
+        run: |
+          git config user.name "WP-AutoBot"
+          git config user.email "autobot@planx.com"
+
+          [ -f data/published_hashes.json ] && git add data/published_hashes.json || true
+          [ -f data/keywords.csv ] && git add data/keywords.csv || true
+          [ -f data/run_log.json ] && git add data/run_log.json || true
+
+          git diff --staged --quiet || git commit -m "update: draft generation state [skip ci]"
+          git push
